@@ -15,6 +15,9 @@ pipeline {
         TF_IN_AUTOMATION = 'true'
         // El estado de Terraform vive en el volumen de Jenkins, fuera del repositorio
         TF_ESTADO = '/var/jenkins_home/terraform/gestor-infra.tfstate'
+        // Caché de Trivy propia de cada job (incidencia INC-09: dos pipelines actualizando la
+        // misma base de Trivy al mismo tiempo provocan SIGSEGV)
+        TRIVY_CACHE_DIR = "/var/jenkins_home/trivy-cache/${env.JOB_NAME}"
         ANSIBLE_FORCE_COLOR = 'false'
     }
 
