@@ -16,8 +16,10 @@ resource "render_project" "gestor" {
 
 # IP pública de quien ejecuta Terraform (Jenkins en el equipo del administrador): es la única
 # que puede conectarse a PostgreSQL desde fuera de Render (Ansible carga y verifica la base).
+# Se consulta a un servicio de AWS porque Render corre en AWS y el proveedor de internet del
+# equipo sale con una IP distinta hacia AWS que hacia otros sitios (incidencia INC-07).
 data "http" "mi_ip" {
-  url = "https://api.ipify.org"
+  url = "https://checkip.amazonaws.com"
 }
 
 locals {
