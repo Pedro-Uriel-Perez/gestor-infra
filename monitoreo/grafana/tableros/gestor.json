@@ -1181,8 +1181,8 @@
     {
       "id": 24,
       "type": "logs",
-      "title": "Peticiones HTTP registradas por Render",
-      "description": "",
+      "title": "Errores y advertencias (todos los servicios)",
+      "description": "Render (plan gratuito) entrega logs de la aplicación y de los builds; aquí solo los de nivel error o warning.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1199,7 +1199,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{fuente=\"render\", tipo=\"request\"}",
+          "expr": "{fuente=\"render\", level=~\"error|warning\"}",
           "refId": "A"
         }
       ],

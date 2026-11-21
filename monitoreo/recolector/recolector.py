@@ -25,8 +25,8 @@ CLAVE = os.environ["RENDER_API_KEY"]
 DUENO = os.environ["RENDER_OWNER_ID"]
 LOKI = os.environ.get("LOKI_URL", "http://loki:3100")
 # "gestor-api=srv-...,gestor-frontend=srv-...,gestor-db=dpg-..."
-RECURSOS = {nombre: recurso for nombre, recurso in
-            (par.split("=", 1) for par in os.environ["RECURSOS_RENDER"].split(","))}
+RECURSOS = {nombre: recurso for nombre, _, recurso in
+            (par.partition("=") for par in os.environ["RECURSOS_RENDER"].split(","))}
 
 # (endpoint de Render, métrica Prometheus, ayuda)
 METRICAS = [
@@ -80,14 +80,16 @@ def copiar_logs(servicio, recurso, desde, vistos):
             if entrada["id"] in vistos:
                 continue
             vistos.append(entrada["id"])
-            etiquetas = {e["name"]: e["value"] for e in entrada.get("labels", [])}
-            clave = (etiquetas.get("type", "app"), etiquetas.get("level", "info"))
-            # Los logs de peticiones HTTP traen los datos en las etiquetas (ruta, estado, tiempo)
-            linea = entrada.get("message") or json.dumps(etiquetas, ensure_ascii=False)
-            flujos.setdefault(clave, []).append([str(a_nanosegundos(entrada["timestamp"])), linea])
             desde = entrada["timestamp"]
+            if not entrada.get("message", "").strip():
+                continue  # Render también registra las líneas en blanco de la salida
+            etiquetas = {e["name"]: e["value"] for e in entrada.get("labels", [])}
+            # tipo: app (aplicación) o build (construcción de la imagen en cada despliegue)
+            clave = (etiquetas.get("type", "app"), etiquetas.get("level", "info"))
+            flujos.setdefault(clave, []).append([str(a_nanosegundos(entrada["timestamp"])), entrada["message"]])
         if flujos:
-            a_loki([{"stream": {"fuente": "render", "servicio": servicio, "tipo": tipo, "nivel": nivel},
+            # "level" es la etiqueta que Grafana usa para colorear cada línea según su severidad
+            a_loki([{"stream": {"fuente": "render", "servicio": servicio, "tipo": tipo, "level": nivel},
                      "values": lineas} for (tipo, nivel), lineas in flujos.items()])
             with candado:
                 estado["logs_enviados"] += sum(len(v) for v in flujos.values())
@@ -218,4 +220,6 @@ if __name__ == "__main__":
     log.info("recursos: %s", RECURSOS)
     threading.Thread(target=ciclo_logs, daemon=True).start()
     threading.Thread(target=ciclo_metricas, daemon=True).start()
-    ThreadingHTTPServer(("0.0.0.0", 9100), Manejador).serve_forever()
+    # HTTP sin TLS a propósito: el puerto 9100 no se publica fuera de la red interna "monitoreo"
+    # de Docker; solo lo consultan Prometheus y Alertmanager.
+    ThreadingHTTPServer(("0.0.0.0", 9100), Manejador).serve_forever()  # NOSONAR
