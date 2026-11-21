@@ -1,0 +1,16 @@
+# Terraform: estado, planes y caché de proveedores (el estado vive en el volumen de Jenkins)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+# Salidas de Terraform con secretos que se pasan a Ansible
+ansible/salidas_terraform.json
+# Copias de trabajo de Ansible (stack de monitoreo con el token, scripts SQL descargados)
+.trabajo/
+monitoreo/prometheus/prometheus.yml
+# Reportes generados en cada ejecución (Jenkins los archiva)
+reportes/
+# Secretos locales
+.env
+*.env

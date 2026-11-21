@@ -1,0 +1,22 @@
+# Salidas de Terraform (terraform output -json > salidas_terraform.json). El archivo contiene
+# secretos, no se versiona y el pipeline lo borra al terminar.
+salidas_terraform: "{{ playbook_dir }}/salidas_terraform.json"
+tf: "{{ lookup('ansible.builtin.file', salidas_terraform) | from_json }}"
+
+url_api: "{{ tf.url_api.value }}"
+url_frontend: "{{ tf.url_frontend.value }}"
+servicios_render: "{{ tf.servicios.value }}"
+metricas_token: "{{ tf.metricas_token.value }}"
+db_url_externa: "{{ tf.db_url_externa.value }}"
+
+# Los scripts SQL viven en el repositorio de la API (ahí los analiza el pipeline gestor-basedatos)
+repo_api: https://github.com/Pedro-Uriel-Perez/gestor-api.git
+rama: main
+
+dir_trabajo: "{{ playbook_dir }}/../.trabajo"
+dir_reportes: "{{ playbook_dir }}/../reportes"
+
+# Los servicios gratuitos de Render se duermen tras 15 min sin tráfico: la primera petición
+# puede tardar varios minutos mientras el contenedor arranca.
+reintentos_arranque: 40
+espera_arranque: 15

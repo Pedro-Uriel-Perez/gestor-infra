@@ -1,0 +1,75 @@
+groups:
+  - name: gestor-disponibilidad
+    rules:
+      - alert: ServicioNoDisponible
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severidad: critica
+        annotations:
+          resumen: "{{ $labels.servicio }} no responde desde fuera"
+          descripcion: "La sonda HTTP a {{ $labels.instance }} falla desde hace 2 minutos."
+
+      - alert: MetricasNoDisponibles
+        expr: up{job="aplicaciones"} == 0
+        for: 3m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: "Prometheus no puede leer las métricas de {{ $labels.servicio }}"
+          descripcion: "El endpoint /actuator/prometheus no responde (servicio caído, dormido o token incorrecto)."
+
+  - name: gestor-rendimiento
+    rules:
+      - alert: TasaDeErrores5xxAlta
+        expr: |
+          sum by (servicio) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+            / clamp_min(sum by (servicio) (rate(http_server_requests_seconds_count[5m])), 1e-9) > 0.05
+        for: 2m
+        labels:
+          severidad: critica
+        annotations:
+          resumen: "{{ $labels.servicio }} responde con errores 5xx en más del 5 % de las peticiones"
+          descripcion: "Tasa actual: {{ $value | humanizePercentage }}."
+
+      - alert: LatenciaP95Alta
+        expr: |
+          histogram_quantile(0.95,
+            sum by (servicio, le) (rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m]))) > 2
+        for: 5m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: "La latencia p95 de {{ $labels.servicio }} supera 2 s"
+          descripcion: "p95 actual: {{ $value | humanizeDuration }}."
+
+  - name: gestor-recursos
+    rules:
+      - alert: MemoriaCercaDelLimite
+        expr: render_memoria_bytes / on(servicio) render_memoria_limite_bytes > 0.9
+        for: 5m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: "{{ $labels.servicio }} usa más del 90 % de la memoria del plan"
+          descripcion: "Uso: {{ $value | humanizePercentage }} de 512 MB. Riesgo de reinicio por falta de memoria."
+
+      - alert: CPUSaturada
+        expr: render_cpu_uso_cores / on(servicio) render_cpu_limite_cores > 0.9
+        for: 5m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: "{{ $labels.servicio }} usa más del 90 % de la CPU del plan"
+          descripcion: "Uso: {{ $value | humanizePercentage }} del límite."
+
+      - alert: HeapJVMAlto
+        expr: |
+          sum by (servicio) (jvm_memory_used_bytes{area="heap"})
+            / sum by (servicio) (jvm_memory_max_bytes{area="heap"}) > 0.9
+        for: 5m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: "El heap de la JVM de {{ $labels.servicio }} está por encima del 90 %"
+          descripcion: "Uso: {{ $value | humanizePercentage }}."

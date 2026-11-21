@@ -1,0 +1,85 @@
+# Stack de monitoreo y observabilidad del Gestor de Proyectos. Lo despliega Ansible
+# (ansible/monitoreo.yml), que antes genera prometheus/prometheus.yml con las URLs de Terraform.
+# Los puertos solo se publican en 127.0.0.1 (no quedan expuestos a la red).
+#   Grafana       http://localhost:3000   (lectura anónima; admin con GRAFANA_ADMIN_PASSWORD)
+#   Prometheus    http://localhost:9090
+#   Alertmanager  http://localhost:9093
+name: monitoreo-gestor
+
+services:
+  prometheus:
+    build: ./prometheus
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-remote-write-receiver   # k6 envía aquí las métricas de las pruebas de carga
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - prometheus_datos:/prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    build: ./alertmanager
+    container_name: alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - alertmanager_datos:/alertmanager
+    restart: unless-stopped
+
+  blackbox:
+    build: ./blackbox
+    container_name: blackbox
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.7.9
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_datos:/loki
+    restart: unless-stopped
+
+  recolector:
+    build: ./recolector
+    container_name: recolector-render
+    environment:
+      RENDER_API_KEY: ${RENDER_API_KEY:?falta RENDER_API_KEY}
+      RENDER_OWNER_ID: ${RENDER_OWNER_ID:?falta RENDER_OWNER_ID}
+      RECURSOS_RENDER: ${RECURSOS_RENDER:?falta RECURSOS_RENDER}
+      LOKI_URL: http://loki:3100
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    build: ./grafana
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?falta GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/tableros/gestor.json
+      GF_USERS_DEFAULT_LANGUAGE: es-ES
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_datos:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - alertmanager
+    restart: unless-stopped
+
+networks:
+  default:
+    name: monitoreo
+
+volumes:
+  prometheus_datos:
+  alertmanager_datos:
+  loki_datos:
+  grafana_datos:

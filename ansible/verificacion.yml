@@ -1,0 +1,84 @@
+---
+# Pruebas de humo contra los servicios publicados en Render: comprueba que frontend, backend y
+# base de datos funcionan integrados y que las métricas están protegidas.
+- name: Verificación de los servicios en Render
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Esperar a que la API responda UP (incluye la conexión a PostgreSQL)
+      ansible.builtin.uri:
+        url: "{{ url_api }}/actuator/health"
+        return_content: true
+        timeout: 60
+      register: salud_api
+      until: salud_api.status == 200 and salud_api.json.status == 'UP'
+      retries: "{{ reintentos_arranque }}"
+      delay: "{{ espera_arranque }}"
+
+    - name: Esperar a que el frontend responda UP
+      ansible.builtin.uri:
+        url: "{{ url_frontend }}/actuator/health"
+        return_content: true
+        timeout: 60
+      register: salud_frontend
+      until: salud_frontend.status == 200 and salud_frontend.json.status == 'UP'
+      retries: "{{ reintentos_arranque }}"
+      delay: "{{ espera_arranque }}"
+
+    - name: La API consulta los proyectos en la base de datos
+      ansible.builtin.uri:
+        url: "{{ url_api }}/buscarProyectos"
+        method: POST
+        return_content: true
+      register: proyectos_api
+      failed_when: proyectos_api.status != 200 or (proyectos_api.json | length) < 1
+
+    - name: Integración completa - el frontend consulta los proyectos a través de la API
+      ansible.builtin.uri:
+        url: "{{ url_frontend }}/consultarProyectos"
+        method: POST
+        return_content: true
+      register: proyectos_frontend
+      failed_when: proyectos_frontend.status != 200 or (proyectos_frontend.json | length) < 1
+
+    - name: La página de inicio de sesión del frontend se publica
+      ansible.builtin.uri:
+        url: "{{ url_frontend }}/login"
+        return_content: true
+      register: login
+      failed_when: login.status != 200 or 'Project.ppml' not in login.content
+
+    - name: Las métricas sin token se rechazan (401)
+      ansible.builtin.uri:
+        url: "{{ item }}/actuator/prometheus"
+        status_code: 401
+      loop:
+        - "{{ url_api }}"
+        - "{{ url_frontend }}"
+
+    - name: Las métricas con el token de Prometheus responden
+      ansible.builtin.uri:
+        url: "{{ item }}/actuator/prometheus"
+        headers:
+          Authorization: "Bearer {{ metricas_token }}"
+        return_content: true
+      loop:
+        - "{{ url_api }}"
+        - "{{ url_frontend }}"
+      register: metricas
+      failed_when: metricas.status != 200 or 'jvm_memory_used_bytes' not in metricas.content
+      no_log: true
+
+    - name: Guardar el reporte de verificación
+      ansible.builtin.copy:
+        dest: "{{ dir_reportes }}/verificacion-servicios.txt"
+        mode: "0644"
+        content: |
+          Verificación de servicios en Render ({{ now(utc=true).isoformat() }} UTC)
+          API       {{ url_api }}/actuator/health → {{ salud_api.json.status }}
+          Frontend  {{ url_frontend }}/actuator/health → {{ salud_frontend.json.status }}
+          API → PostgreSQL: POST /buscarProyectos devolvió {{ proyectos_api.json | length }} proyecto(s)
+          Frontend → API → PostgreSQL: POST /consultarProyectos devolvió {{ proyectos_frontend.json | length }} proyecto(s)
+          Frontend /login → HTTP {{ login.status }}
+          /actuator/prometheus sin token → 401 en API y frontend; con token → 200

@@ -1,0 +1,9 @@
+# Render es un servicio administrado (no hay servidores a los que entrar por SSH): Ansible se ejecuta
+# en el equipo de administración (dentro de Jenkins) y trabaja contra las APIs y servicios remotos:
+#   - PostgreSQL de Render (psql por SSL, solo desde la IP autorizada por Terraform)
+#   - URLs públicas de la API y del frontend
+#   - Docker local, donde levanta el stack de monitoreo
+all:
+  hosts:
+    localhost:
+      ansible_connection: local

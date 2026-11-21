@@ -1,0 +1,102 @@
+---
+# Despliega el stack de monitoreo (Prometheus, Alertmanager, blackbox exporter, Loki, Grafana y el
+# recolector de Render) en el Docker del equipo de administración y comprueba que recolecta datos.
+- name: Monitoreo y observabilidad
+  hosts: localhost
+  gather_facts: false
+  vars:
+    dir_stack: "{{ dir_trabajo }}/monitoreo"
+    # Desde Jenkins (contenedor conectado a la red "monitoreo") se usan los nombres de los
+    # contenedores; desde el equipo, localhost.
+    en_contenedor: "{{ '/.dockerenv' is exists }}"
+    url_prometheus: "{{ 'http://prometheus:9090' if en_contenedor else 'http://localhost:9090' }}"
+    url_grafana: "{{ 'http://grafana:3000' if en_contenedor else 'http://localhost:3000' }}"
+  environment:
+    RENDER_API_KEY: "{{ lookup('ansible.builtin.env', 'RENDER_API_KEY') }}"
+    GRAFANA_ADMIN_PASSWORD: "{{ lookup('ansible.builtin.env', 'GRAFANA_ADMIN_PASSWORD') }}"
+    RENDER_OWNER_ID: "{{ tf.render_owner_id.value }}"
+    # gestor-api=srv-...,gestor-frontend=srv-...,gestor-db=dpg-...
+    RECURSOS_RENDER: "{% for nombre, id in servicios_render.items() %}{{ nombre }}={{ id }}{{ '' if loop.last else ',' }}{% endfor %}"
+
+  tasks:
+    - name: Copiar la definición del stack
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../monitoreo/"
+        dest: "{{ dir_stack }}/"
+        mode: preserve
+
+    - name: Generar la configuración de Prometheus con las URLs y el token de Terraform
+      ansible.builtin.template:
+        src: "{{ dir_stack }}/prometheus/prometheus.yml.j2"
+        dest: "{{ dir_stack }}/prometheus/prometheus.yml"
+        mode: "0644"
+
+    - name: Construir y levantar los contenedores
+      ansible.builtin.command: docker compose up -d --build --remove-orphans
+      args:
+        chdir: "{{ dir_stack }}"
+      register: compose
+      changed_when: compose.stderr is search('Recreated|Created|Started')
+
+    - name: Conectar este contenedor (Jenkins) a la red del monitoreo
+      ansible.builtin.command: docker network connect monitoreo {{ lookup('ansible.builtin.env', 'HOSTNAME') }}
+      register: red
+      changed_when: red.rc == 0
+      failed_when: red.rc != 0 and 'already exists' not in red.stderr
+      when: en_contenedor
+
+    - name: Esperar a que Prometheus esté listo
+      ansible.builtin.uri:
+        url: "{{ url_prometheus }}/-/ready"
+      register: listo
+      until: listo.status == 200
+      retries: 20
+      delay: 5
+
+    - name: Esperar a que todos los objetivos respondan (despierta los servicios de Render)
+      ansible.builtin.uri:
+        url: "{{ url_prometheus }}/api/v1/targets?state=active"
+        return_content: true
+      register: objetivos
+      until: >-
+        objetivos.json.data.activeTargets | length > 0 and
+        objetivos.json.data.activeTargets | rejectattr('health', 'equalto', 'up') | list | length == 0
+      retries: "{{ reintentos_arranque }}"
+      delay: "{{ espera_arranque }}"
+
+    - name: Consultar las reglas de alerta cargadas
+      ansible.builtin.uri:
+        url: "{{ url_prometheus }}/api/v1/rules"
+        return_content: true
+      register: reglas
+
+    - name: Esperar a que Grafana esté listo
+      ansible.builtin.uri:
+        url: "{{ url_grafana }}/api/health"
+        return_content: true
+      register: grafana
+      until: grafana.status == 200 and grafana.json.database == 'ok'
+      retries: 20
+      delay: 5
+
+    - name: Guardar el reporte del monitoreo
+      ansible.builtin.copy:
+        dest: "{{ dir_reportes }}/monitoreo.txt"
+        mode: "0644"
+        content: |
+          Stack de monitoreo desplegado ({{ now(utc=true).isoformat() }} UTC)
+          Grafana {{ grafana.json.version }} - {{ url_grafana }}  |  Prometheus - {{ url_prometheus }}
+
+          Objetivos de Prometheus:
+          {% for t in objetivos.json.data.activeTargets | sort(attribute='labels.job') %}
+          {%   set url = t.scrapeUrl | regex_replace('\?.*', '') %}
+          {%   set ms = (t.lastScrapeDuration * 1000) | round(0) | int %}
+            [{{ t.health | upper }}] {{ t.labels.job }} {{ t.labels.servicio | default('') }} {{ url }} ({{ ms }} ms)
+          {% endfor %}
+
+          Reglas de alerta cargadas:
+          {% for g in reglas.json.data.groups %}
+          {% for r in g.rules %}
+            {{ g.name }} / {{ r.name }}: {{ r.state | default(r.health) }}
+          {% endfor %}
+          {% endfor %}

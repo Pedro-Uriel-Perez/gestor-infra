@@ -1,0 +1,62 @@
+# Generado por Ansible (ansible/monitoreo.yml) con las URLs que entrega Terraform.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 25s
+  evaluation_interval: 30s
+  external_labels:
+    entorno: produccion
+
+rule_files:
+  - /etc/prometheus/reglas.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Métricas de las aplicaciones (Actuator + Micrometer), protegidas con token
+  - job_name: aplicaciones
+    scheme: https
+    metrics_path: /actuator/prometheus
+    authorization:
+      type: Bearer
+      credentials: "{{ metricas_token }}"
+    static_configs:
+      - targets: ["{{ url_api | urlsplit('hostname') }}"]
+        labels:
+          servicio: gestor-api
+      - targets: ["{{ url_frontend | urlsplit('hostname') }}"]
+        labels:
+          servicio: gestor-frontend
+
+  # Disponibilidad vista desde fuera, como la ve un usuario (blackbox exporter)
+  - job_name: disponibilidad
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["{{ url_api }}/actuator/health"]
+        labels:
+          servicio: gestor-api
+      - targets: ["{{ url_frontend }}/login"]
+        labels:
+          servicio: gestor-frontend
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # CPU, memoria y conexiones según la plataforma Render (recolector)
+  - job_name: render
+    scrape_interval: 60s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ["recolector:9100"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,91 @@
+---
+# Configura la base dbgestor de Render con los scripts versionados en gestor-api.
+# Es idempotente: el esquema y los datos iniciales solo se cargan si la base está vacía;
+# después, cada ejecución solo verifica la estructura.
+- name: Base de datos dbgestor en Render
+  hosts: localhost
+  gather_facts: false
+  environment:
+    # La URL con la contraseña va en una variable de entorno para que no aparezca en el log
+    URL_BD: "{{ db_url_externa }}?sslmode=require"
+  vars:
+    dir_sql: "{{ dir_trabajo }}/gestor-api/sql/postgres"
+
+  tasks:
+    - name: Descargar los scripts SQL del repositorio gestor-api
+      ansible.builtin.git:
+        repo: "{{ repo_api }}"
+        dest: "{{ dir_trabajo }}/gestor-api"
+        version: "{{ rama }}"
+        depth: 1
+        force: true
+
+    - name: Esperar a que PostgreSQL acepte conexiones (por SSL, desde la IP autorizada)
+      ansible.builtin.shell: psql "$URL_BD" -tAc "SELECT 1"
+      args:
+        executable: /bin/bash
+      register: conexion
+      until: conexion.rc == 0
+      retries: 20
+      delay: 15
+      changed_when: false
+
+    - name: Revisar si el esquema ya existe
+      ansible.builtin.shell: psql "$URL_BD" -tAc "SELECT to_regclass('public.usuario') IS NOT NULL"
+      args:
+        executable: /bin/bash
+      register: esquema
+      changed_when: false
+
+    - name: Crear el esquema (01_schema.sql) y cargar los datos iniciales (02_data.sql)
+      ansible.builtin.shell: |
+        set -e
+        psql "$URL_BD" -v ON_ERROR_STOP=1 -q -f 01_schema.sql
+        psql "$URL_BD" -v ON_ERROR_STOP=1 -q -f 02_data.sql
+      args:
+        chdir: "{{ dir_sql }}"
+        executable: /bin/bash
+      when: esquema.stdout != 't'
+      register: carga
+      changed_when: true
+      notify: Verificación completa de integridad
+
+    # Si la base se acaba de cargar, aquí corre la verificación completa (handler)
+    - name: Ejecutar las verificaciones pendientes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Verificación de producción (PROD-01 a PROD-05)
+      ansible.builtin.shell: psql "$URL_BD" -v ON_ERROR_STOP=1 -f {{ playbook_dir }}/files/verificacion_produccion.sql 2>&1
+      args:
+        executable: /bin/bash
+      register: verificacion_produccion
+      changed_when: false
+
+    - name: Guardar el reporte de la base de datos
+      ansible.builtin.copy:
+        dest: "{{ dir_reportes }}/verificacion-bd-render.txt"
+        mode: "0644"
+        content: |
+          Base de datos dbgestor en Render (verificada {{ now(utc=true).isoformat() }} UTC)
+          Esquema y datos iniciales cargados en esta ejecución: {{ 'sí' if carga is changed else 'no (la base ya tenía el esquema)' }}
+
+          {% if carga is changed %}
+          == Verificación completa (05_verificacion_integridad.sql) ==
+          {{ verificacion_inicial.stdout }}
+
+          {% endif %}
+          == Verificación de producción ==
+          {{ verificacion_produccion.stdout }}
+
+    - name: Mostrar el resultado
+      ansible.builtin.debug:
+        msg: "{{ (verificacion_inicial.stdout_lines | default([])) + verificacion_produccion.stdout_lines }}"
+
+  handlers:
+    - name: Verificación completa de integridad
+      ansible.builtin.shell: psql "$URL_BD" -v ON_ERROR_STOP=1 -f 05_verificacion_integridad.sql 2>&1
+      args:
+        chdir: "{{ dir_sql }}"
+        executable: /bin/bash
+      register: verificacion_inicial
+      changed_when: false

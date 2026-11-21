@@ -1,0 +1,66 @@
+// Pipeline de RENDIMIENTO (job gestor-rendimiento): prueba de carga controlada con k6 contra los
+// servicios desplegados en Render. Las métricas se envían a Prometheus y se ven en Grafana mientras
+// corre la prueba; al final se archivan el resumen (JSON/texto) y el reporte HTML de k6.
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'USUARIOS', choices: ['10', '5', '20'],
+               description: 'Usuarios virtuales máximos del escenario de la API (el frontend usa la tercera parte)')
+    }
+
+    environment {
+        TF_ESTADO = '/var/jenkins_home/terraform/gestor-infra.tfstate'
+        // k6 → Prometheus (remote write); Jenkins se conecta a la red del monitoreo
+        K6_PROMETHEUS_RW_SERVER_URL = 'http://prometheus:9090/api/v1/write'
+        K6_PROMETHEUS_RW_TREND_STATS = 'p(50),p(95),p(99),avg,max'
+        K6_WEB_DASHBOARD = 'true'
+        K6_WEB_DASHBOARD_EXPORT = 'reportes/k6-reporte.html'
+        K6_NO_USAGE_REPORT = 'true'
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Objetivos') {
+            steps {
+                dir('terraform') {
+                    // Las URLs salen del estado de Terraform (no se escriben a mano)
+                    sh 'terraform init -input=false -no-color -backend-config="path=$TF_ESTADO" > /dev/null'
+                    script {
+                        env.URL_API = sh(script: 'terraform output -raw url_api', returnStdout: true).trim()
+                        env.URL_FRONTEND = sh(script: 'terraform output -raw url_frontend', returnStdout: true).trim()
+                    }
+                }
+                sh '''
+                    k6 version
+                    echo "API: $URL_API"
+                    echo "Frontend: $URL_FRONTEND"
+                    mkdir -p reportes
+                    docker network connect monitoreo "$HOSTNAME" 2>/dev/null || true
+                '''
+            }
+        }
+        stage('Prueba de carga (k6)') {
+            steps {
+                sh '''#!/bin/bash
+                    set -o pipefail
+                    k6 run -o experimental-prometheus-rw \
+                        -e URL_API="$URL_API" -e URL_FRONTEND="$URL_FRONTEND" -e USUARIOS="$USUARIOS" \
+                        --summary-export reportes/k6-resumen.json \
+                        rendimiento/carga.js 2>&1 | tee reportes/k6-salida.txt
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'reportes/**', allowEmptyArchive: true
+        }
+    }
+}

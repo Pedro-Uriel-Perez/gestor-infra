@@ -1,0 +1,106 @@
+# Infraestructura del Gestor de Proyectos en Render:
+#   proyecto "gestor-proyectos" (entorno produccion)
+#     ├─ gestor-db        PostgreSQL 18
+#     ├─ gestor-api       API REST (Docker, repo gestor-api)       → se conecta a gestor-db por la red interna
+#     └─ gestor-frontend  Frontend web (Docker, repo gestor-frontend) → consume gestor-api por HTTPS
+
+resource "render_project" "gestor" {
+  name = "gestor-proyectos"
+  environments = {
+    produccion = {
+      name             = "produccion"
+      protected_status = "unprotected"
+    }
+  }
+}
+
+# IP pública de quien ejecuta Terraform (Jenkins en el equipo del administrador): es la única
+# que puede conectarse a PostgreSQL desde fuera de Render (Ansible carga y verifica la base).
+data "http" "mi_ip" {
+  url = "https://api.ipify.org"
+}
+
+locals {
+  entorno_id = render_project.gestor.environments["produccion"].id
+  ip_admin   = var.ip_admin_cidr != "" ? var.ip_admin_cidr : "${chomp(data.http.mi_ip.response_body)}/32"
+}
+
+resource "render_postgres" "db" {
+  name           = "gestor-db"
+  plan           = var.plan
+  region         = var.region
+  version        = "18"
+  database_name  = "dbgestor"
+  database_user  = "gestor"
+  environment_id = local.entorno_id
+
+  ip_allow_list = [{
+    cidr_block  = local.ip_admin
+    description = "Administracion (Jenkins / Ansible)"
+  }]
+}
+
+# Token que comparten las aplicaciones y Prometheus para proteger /actuator/prometheus
+resource "random_password" "metricas" {
+  length  = 40
+  special = false
+}
+
+locals {
+  # postgresql://usuario:clave@host[:puerto]/base → piezas para el JDBC de Spring Boot
+  db = regex(
+    "^postgres(?:ql)?://(?P<usuario>[^:]+):(?P<clave>[^@]+)@(?P<host>[^/:]+)(?::(?P<puerto>\\d+))?/(?P<base>.+)$",
+    render_postgres.db.connection_info.internal_connection_string
+  )
+}
+
+resource "render_web_service" "api" {
+  name              = "gestor-api"
+  plan              = var.plan
+  region            = var.region
+  environment_id    = local.entorno_id
+  health_check_path = "/actuator/health/liveness"
+
+  runtime_source = {
+    docker = {
+      repo_url        = var.repo_api
+      branch          = var.rama
+      context         = "."
+      dockerfile_path = "./Dockerfile"
+      # Render no despliega solo con cada commit: despliega Jenkins cuando el pipeline
+      # pasa pruebas, Quality Gate, Trivy y Semgrep.
+      auto_deploy = false
+    }
+  }
+
+  env_vars = {
+    DB_URL         = { value = "jdbc:postgresql://${local.db.host}:${coalesce(local.db.puerto, "5432")}/${local.db.base}?stringtype=unspecified" }
+    DB_USER        = { value = local.db.usuario }
+    DB_PASSWORD    = { value = local.db.clave }
+    METRICAS_TOKEN = { value = random_password.metricas.result }
+    SQL_EN_LOGS    = { value = "false" }
+  }
+}
+
+resource "render_web_service" "frontend" {
+  name              = "gestor-frontend"
+  plan              = var.plan
+  region            = var.region
+  environment_id    = local.entorno_id
+  health_check_path = "/actuator/health/liveness"
+
+  runtime_source = {
+    docker = {
+      repo_url        = var.repo_frontend
+      branch          = var.rama
+      context         = "."
+      dockerfile_path = "./Dockerfile"
+      auto_deploy     = false
+    }
+  }
+
+  env_vars = {
+    API_URL        = { value = render_web_service.api.url }
+    METRICAS_TOKEN = { value = random_password.metricas.result }
+  }
+}

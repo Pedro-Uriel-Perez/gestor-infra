@@ -1,0 +1,14 @@
+# Las alertas se agrupan por regla y servicio y se envían al recolector, que las guarda en Loki
+# para verlas en Grafana junto con los logs. send_resolved avisa también cuando se resuelven.
+route:
+  receiver: registro-en-loki
+  group_by: [alertname, servicio]
+  group_wait: 30s
+  group_interval: 2m
+  repeat_interval: 1h
+
+receivers:
+  - name: registro-en-loki
+    webhook_configs:
+      - url: http://recolector:9100/alertas
+        send_resolved: true

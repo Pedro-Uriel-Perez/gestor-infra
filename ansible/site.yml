@@ -1,0 +1,11 @@
+---
+# Configuración completa después de "terraform apply":
+#   ansible-playbook site.yml
+- name: Base de datos
+  ansible.builtin.import_playbook: basedatos.yml
+
+- name: Verificación de servicios
+  ansible.builtin.import_playbook: verificacion.yml
+
+- name: Monitoreo
+  ansible.builtin.import_playbook: monitoreo.yml
