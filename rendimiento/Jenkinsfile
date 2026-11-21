@@ -5,7 +5,7 @@ pipeline {
     agent any
 
     parameters {
-        choice(name: 'USUARIOS', choices: ['10', '5', '20'],
+        choice(name: 'USUARIOS', choices: ['10', '5', '20', '40'],
                description: 'Usuarios virtuales máximos del escenario de la API (el frontend usa la tercera parte)')
     }
 
