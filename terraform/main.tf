@@ -56,10 +56,16 @@ locals {
   )
 }
 
-locals {
-  # OpenTelemetry (agente Java incluido en las imágenes): trazas, métricas y logs → Grafana Cloud.
-  # El encabezado lleva "%20" en lugar del espacio porque el agente decodifica los valores.
-  otel = {
+# OpenTelemetry (agente Java incluido en las imágenes): trazas, métricas y logs → Grafana Cloud.
+# Las variables van en un grupo de entorno vinculado a los dos servicios: actualizar un servicio
+# web gratuito con el proveedor de Render falla ("maintenance mode can only be configured for
+# non-free tier services"), mientras que el grupo se actualiza sin tocar los servicios (INC-17).
+# El nombre de cada servicio (OTEL_SERVICE_NAME) ya viene en su Dockerfile.
+# El encabezado lleva "%20" en lugar del espacio porque el agente decodifica los valores.
+resource "render_env_group" "otel" {
+  name           = "otel-grafana-cloud"
+  environment_id = local.entorno_id
+  env_vars = {
     OTEL_SDK_DISABLED           = { value = "false" }
     OTEL_EXPORTER_OTLP_ENDPOINT = { value = var.otlp_endpoint }
     OTEL_EXPORTER_OTLP_PROTOCOL = { value = "http/protobuf" }
@@ -67,6 +73,11 @@ locals {
     OTEL_RESOURCE_ATTRIBUTES    = { value = "deployment.environment.name=produccion,service.namespace=gestor-proyectos" }
     OTEL_METRIC_EXPORT_INTERVAL = { value = "30000" }
   }
+}
+
+resource "render_env_group_link" "otel" {
+  env_group_id = render_env_group.otel.id
+  service_ids  = [render_web_service.api.id, render_web_service.frontend.id]
 }
 
 resource "render_web_service" "api" {
@@ -88,14 +99,21 @@ resource "render_web_service" "api" {
     }
   }
 
-  env_vars = merge(local.otel, {
-    OTEL_SERVICE_NAME = { value = "gestor-api" }
-    DB_URL            = { value = "jdbc:postgresql://${local.db.host}:${coalesce(local.db.puerto, "5432")}/${local.db.base}?stringtype=unspecified" }
-    DB_USER           = { value = local.db.usuario }
-    DB_PASSWORD       = { value = local.db.clave }
-    METRICAS_TOKEN    = { value = random_password.metricas.result }
-    SQL_EN_LOGS       = { value = "false" }
-  })
+  env_vars = {
+    DB_URL         = { value = "jdbc:postgresql://${local.db.host}:${coalesce(local.db.puerto, "5432")}/${local.db.base}?stringtype=unspecified" }
+    DB_USER        = { value = local.db.usuario }
+    DB_PASSWORD    = { value = local.db.clave }
+    METRICAS_TOKEN = { value = random_password.metricas.result }
+    SQL_EN_LOGS    = { value = "false" }
+  }
+
+  # Render rechaza actualizar servicios web gratuitos con este proveedor ("maintenance mode can only
+  # be configured for non-free tier services"): las variables se fijan al crear el servicio y los
+  # cambios posteriores van en grupos de entorno (render_env_group). Sin esto, cambiar la IP
+  # autorizada de la base recalcula la conexión y fuerza una actualización que falla (INC-17).
+  lifecycle {
+    ignore_changes = [env_vars]
+  }
 }
 
 resource "render_web_service" "frontend" {
@@ -115,9 +133,16 @@ resource "render_web_service" "frontend" {
     }
   }
 
-  env_vars = merge(local.otel, {
-    OTEL_SERVICE_NAME = { value = "gestor-frontend" }
-    API_URL           = { value = render_web_service.api.url }
-    METRICAS_TOKEN    = { value = random_password.metricas.result }
-  })
+  env_vars = {
+    API_URL        = { value = render_web_service.api.url }
+    METRICAS_TOKEN = { value = random_password.metricas.result }
+  }
+
+  # Render rechaza actualizar servicios web gratuitos con este proveedor ("maintenance mode can only
+  # be configured for non-free tier services"): las variables se fijan al crear el servicio y los
+  # cambios posteriores van en grupos de entorno (render_env_group). Sin esto, cambiar la IP
+  # autorizada de la base recalcula la conexión y fuerza una actualización que falla (INC-17).
+  lifecycle {
+    ignore_changes = [env_vars]
+  }
 }
