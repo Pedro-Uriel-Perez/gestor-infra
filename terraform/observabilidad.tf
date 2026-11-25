@@ -53,8 +53,9 @@ resource "grafana_folder" "gestor" {
 }
 
 resource "grafana_dashboard" "gestor" {
-  folder      = grafana_folder.gestor.uid
-  config_json = file("${path.module}/tableros/gestor-cloud.json")
+  folder = grafana_folder.gestor.uid
+  # El panel de alertas muestra solo las reglas de esta carpeta (su uid se conoce al crearla)
+  config_json = replace(file("${path.module}/tableros/gestor-cloud.json"), "__CARPETA_UID__", grafana_folder.gestor.uid)
   overwrite   = true
 }
 

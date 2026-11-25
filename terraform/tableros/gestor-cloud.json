@@ -254,7 +254,11 @@
           "noData": false
         },
         "alertInstanceLabelFilter": "",
-        "folder": null
+        "dashboardAlerts": false,
+        "folder": {
+          "uid": "__CARPETA_UID__",
+          "title": "Gestor de Proyectos"
+        }
       }
     },
     {
@@ -402,7 +406,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"produccion\", http_response_status_code=~\"5..\"}[5m])) / clamp_min(sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"produccion\"}[5m])), 1e-9)",
+          "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"produccion\", http_response_status_code=~\"5..\"}[5m])) / clamp_min(sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"produccion\"}[5m])), 1e-9) or sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"produccion\"}[5m])) * 0",
           "legendFormat": "{{service_name}}",
           "refId": "A"
         }
@@ -708,7 +712,7 @@
           "queryType": "traceql",
           "limit": 20,
           "tableType": "traces",
-          "query": "{resource.service.namespace=\"gestor-proyectos\" && resource.deployment.environment.name=\"produccion\"}"
+          "query": "{resource.service.namespace=\"gestor-proyectos\" && resource.deployment.environment.name=\"produccion\" && name !~ \".*actuator.*\"}"
         }
       ],
       "fieldConfig": {
@@ -940,7 +944,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (escenario) (rate(http_req_failed_total{service_name=\"k6-gestor\", escenario=~\"api|frontend\"}[1m])) / clamp_min(sum by (escenario) (rate(http_reqs_total{service_name=\"k6-gestor\", escenario=~\"api|frontend\"}[1m])), 1e-9)",
+          "expr": "(sum by (escenario) (rate(http_reqs_total{service_name=\"k6-gestor\", escenario=~\"api|frontend\", expected_response=\"false\"}[1m])) or sum by (escenario) (rate(http_reqs_total{service_name=\"k6-gestor\", escenario=~\"api|frontend\"}[1m])) * 0) / clamp_min(sum by (escenario) (rate(http_reqs_total{service_name=\"k6-gestor\", escenario=~\"api|frontend\"}[1m])), 1e-9)",
           "legendFormat": "{{escenario}}",
           "refId": "A"
         }
