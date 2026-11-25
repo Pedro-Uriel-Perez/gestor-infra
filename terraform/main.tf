@@ -56,6 +56,19 @@ locals {
   )
 }
 
+locals {
+  # OpenTelemetry (agente Java incluido en las imágenes): trazas, métricas y logs → Grafana Cloud.
+  # El encabezado lleva "%20" en lugar del espacio porque el agente decodifica los valores.
+  otel = {
+    OTEL_SDK_DISABLED           = { value = "false" }
+    OTEL_EXPORTER_OTLP_ENDPOINT = { value = var.otlp_endpoint }
+    OTEL_EXPORTER_OTLP_PROTOCOL = { value = "http/protobuf" }
+    OTEL_EXPORTER_OTLP_HEADERS  = { value = "Authorization=Basic%20${base64encode("${var.otlp_instance_id}:${var.otlp_token}")}" }
+    OTEL_RESOURCE_ATTRIBUTES    = { value = "deployment.environment.name=produccion,service.namespace=gestor-proyectos" }
+    OTEL_METRIC_EXPORT_INTERVAL = { value = "30000" }
+  }
+}
+
 resource "render_web_service" "api" {
   name              = "gestor-api"
   plan              = var.plan
@@ -69,19 +82,20 @@ resource "render_web_service" "api" {
       branch          = var.rama
       context         = "."
       dockerfile_path = "./Dockerfile"
-      # Render no despliega solo con cada commit: despliega Jenkins cuando el pipeline
-      # pasa pruebas, Quality Gate, Trivy y Semgrep.
+      # Render no despliega solo con cada commit: despliega el pipeline (GitHub Actions)
+      # cuando pasan las pruebas, el Quality Gate, Trivy y Semgrep.
       auto_deploy = false
     }
   }
 
-  env_vars = {
-    DB_URL         = { value = "jdbc:postgresql://${local.db.host}:${coalesce(local.db.puerto, "5432")}/${local.db.base}?stringtype=unspecified" }
-    DB_USER        = { value = local.db.usuario }
-    DB_PASSWORD    = { value = local.db.clave }
-    METRICAS_TOKEN = { value = random_password.metricas.result }
-    SQL_EN_LOGS    = { value = "false" }
-  }
+  env_vars = merge(local.otel, {
+    OTEL_SERVICE_NAME = { value = "gestor-api" }
+    DB_URL            = { value = "jdbc:postgresql://${local.db.host}:${coalesce(local.db.puerto, "5432")}/${local.db.base}?stringtype=unspecified" }
+    DB_USER           = { value = local.db.usuario }
+    DB_PASSWORD       = { value = local.db.clave }
+    METRICAS_TOKEN    = { value = random_password.metricas.result }
+    SQL_EN_LOGS       = { value = "false" }
+  })
 }
 
 resource "render_web_service" "frontend" {
@@ -101,8 +115,9 @@ resource "render_web_service" "frontend" {
     }
   }
 
-  env_vars = {
-    API_URL        = { value = render_web_service.api.url }
-    METRICAS_TOKEN = { value = random_password.metricas.result }
-  }
+  env_vars = merge(local.otel, {
+    OTEL_SERVICE_NAME = { value = "gestor-frontend" }
+    API_URL           = { value = render_web_service.api.url }
+    METRICAS_TOKEN    = { value = random_password.metricas.result }
+  })
 }

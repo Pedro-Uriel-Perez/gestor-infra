@@ -38,3 +38,51 @@ variable "ip_admin_cidr" {
   type        = string
   default     = ""
 }
+
+# ---------------------------------------------------------------- Observabilidad (Grafana Cloud)
+# Los valores llegan como TF_VAR_* desde los secretos de GitHub Actions; ninguno se versiona.
+
+variable "grafana_url" {
+  description = "URL del stack de Grafana Cloud (https://<stack>.grafana.net)"
+  type        = string
+}
+
+variable "grafana_stack_slug" {
+  description = "Nombre corto del stack de Grafana Cloud"
+  type        = string
+}
+
+variable "otlp_endpoint" {
+  description = "Gateway OTLP de Grafana Cloud (región us-east-2, la misma de Render)"
+  type        = string
+  default     = "https://otlp-gateway-prod-us-east-2.grafana.net/otlp"
+}
+
+variable "otlp_instance_id" {
+  description = "Id de instancia del stack para autenticarse en el gateway OTLP"
+  type        = string
+}
+
+variable "otlp_token" {
+  description = "Token de Grafana Cloud (metrics/logs/traces:write, stacks:read) para OTLP y el monitoreo sintético"
+  type        = string
+  sensitive   = true
+}
+
+variable "correo_alertas" {
+  description = "Correo que recibe las alertas"
+  type        = string
+  sensitive   = true
+}
+
+variable "sondas" {
+  description = "Sondas públicas de Grafana Synthetic Monitoring que revisan las URLs desde fuera"
+  type        = list(string)
+  default     = ["Ohio", "NorthVirginia"]
+}
+
+variable "frecuencia_sonda_ms" {
+  description = "Cada cuánto revisa cada sonda (el plan gratuito incluye 100 000 ejecuciones al mes)"
+  type        = number
+  default     = 180000
+}

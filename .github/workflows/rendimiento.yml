@@ -1,0 +1,93 @@
+# Pipeline de RENDIMIENTO en la nube (GitHub Actions), sustituto del job gestor-rendimiento de Jenkins:
+# prueba de carga controlada con k6 contra los servicios propios en Render. Las métricas se envían
+# por OpenTelemetry a Grafana Cloud (se ven en vivo en el tablero) y se archivan el resumen y el
+# reporte HTML de k6.
+name: Rendimiento (k6)
+
+on:
+  workflow_dispatch:
+    inputs:
+      usuarios:
+        description: "Usuarios virtuales máximos del escenario de la API (el frontend usa la tercera parte)"
+        type: choice
+        options: ["10", "20", "40"]
+        default: "10"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rendimiento
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  K6_VERSION: 2.3.0
+
+jobs:
+  carga:
+    name: Prueba de carga (k6, ${{ inputs.usuarios }} usuarios)
+    runs-on: ubuntu-24.04
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      # k6 → Grafana Cloud por OpenTelemetry (mismo gateway OTLP que las aplicaciones)
+      K6_OTEL_EXPORTER_PROTOCOL: http/protobuf
+      K6_OTEL_HTTP_EXPORTER_ENDPOINT: otlp-gateway-prod-us-east-2.grafana.net
+      K6_OTEL_HTTP_EXPORTER_URL_PATH: /otlp/v1/metrics
+      K6_OTEL_SERVICE_NAME: k6-gestor
+      K6_OTEL_EXPORT_INTERVAL: 5s
+      K6_WEB_DASHBOARD: "true"
+      K6_WEB_DASHBOARD_EXPORT: reportes/k6-reporte.html
+      K6_NO_USAGE_REPORT: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Instalar k6
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/grafana/k6/releases/download/v${K6_VERSION}/k6-v${K6_VERSION}-linux-amd64.tar.gz" \
+            | tar -xz --strip-components=1 -C "$RUNNER_TEMP" "k6-v${K6_VERSION}-linux-amd64/k6"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Objetivos (URLs de Render por nombre de servicio)
+        run: |
+          url() {
+            curl --proto '=https' --tlsv1.2 -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
+              "https://api.render.com/v1/services?name=$1&limit=1" | jq -r '.[0].service.serviceDetails.url'
+          }
+          echo "URL_API=$(url gestor-api)" >> "$GITHUB_ENV"
+          echo "URL_FRONTEND=$(url gestor-frontend)" >> "$GITHUB_ENV"
+          mkdir -p reportes
+          k6 version
+
+      - name: Prueba de carga (k6)
+        env:
+          K6_OTEL_HEADERS: "Authorization=Basic ${{ secrets.OTLP_AUTH_BASIC }}"
+          USUARIOS: ${{ inputs.usuarios }}
+        run: |
+          k6 run -o opentelemetry \
+            -e URL_API="$URL_API" -e URL_FRONTEND="$URL_FRONTEND" -e USUARIOS="$USUARIOS" \
+            --summary-export reportes/k6-resumen.json \
+            rendimiento/carga.js 2>&1 | tee reportes/k6-salida.txt
+
+      - name: Resumen
+        if: always()
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          m = json.load(open("reportes/k6-resumen.json"))["metrics"]
+          d = m["http_req_duration"]
+          print("### Prueba de carga con k6")
+          print(f"- Peticiones: {m['http_reqs']['count']} ({m['http_reqs']['rate']:.1f} por segundo)")
+          print(f"- Fallidas: {100 * m['http_req_failed']['value']:.2f} %")
+          print(f"- Latencia: p50 {d['med']:.1f} ms · p95 {d['p(95)']:.1f} ms · p99 {d['p(99)']:.1f} ms · máx {d['max']:.0f} ms")
+          EOF
+
+      - name: Guardar reportes
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reportes-k6-${{ inputs.usuarios }}-usuarios
+          path: reportes/

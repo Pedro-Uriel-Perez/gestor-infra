@@ -1,0 +1,161 @@
+# Pipeline de INFRAESTRUCTURA en la nube (GitHub Actions), sustituto del job gestor-infra de Jenkins:
+# validar y escanear el IaC → terraform plan → terraform apply (Render + Grafana Cloud)
+# → Ansible: base de datos y verificación de los servicios integrados.
+# El estado de Terraform vive en PostgreSQL (Neon) con bloqueo; los secretos están en GitHub.
+name: Infraestructura (Terraform + Ansible)
+
+on:
+  push:
+    branches: [main]
+    paths: ["terraform/**", "ansible/**", ".github/workflows/infra.yml"]
+  pull_request:
+    paths: ["terraform/**", "ansible/**"]
+  workflow_dispatch:
+    inputs:
+      aplicar:
+        description: "Aplicar los cambios (terraform apply) y configurar con Ansible"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Nunca dos ejecuciones a la vez sobre la misma infraestructura
+concurrency:
+  group: infraestructura
+  cancel-in-progress: false
+
+# shell: bash explícito = bash -eo pipefail (un "| tee" no oculta los errores)
+defaults:
+  run:
+    shell: bash
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TERRAFORM_VERSION: 1.17.1
+  TRIVY_VERSION: 0.76.1
+  ANSIBLE_CORE_VERSION: 2.21.6
+  ANSIBLE_LINT_VERSION: 26.10.1
+
+jobs:
+  validar:
+    name: Validar y escanear el IaC
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Terraform fmt y validate
+        working-directory: terraform
+        run: |
+          mkdir -p ../reportes
+          terraform fmt -check -recursive -diff
+          terraform init -input=false -no-color -backend=false
+          terraform validate -no-color
+
+      - name: Buenas prácticas de los playbooks (ansible-lint)
+        working-directory: ansible
+        run: |
+          pip install --quiet --only-binary :all: "ansible-core==${ANSIBLE_CORE_VERSION}" "ansible-lint==${ANSIBLE_LINT_VERSION}"
+          ansible-lint --nocolor . 2>&1 | tee ../reportes/ansible-lint.txt
+
+      - name: Escaneo de seguridad del IaC (Trivy)
+        # Terraform, Dockerfiles del monitoreo local y docker-compose; falla con hallazgos HIGH/CRITICAL
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" trivy
+          export PATH="$RUNNER_TEMP:$PATH"
+          trivy config --format table --output reportes/trivy-iac.txt .
+          cat reportes/trivy-iac.txt
+          trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet .
+
+      - name: Guardar reportes
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reportes-validacion
+          path: reportes/
+
+  aprovisionar:
+    name: Aprovisionar (Terraform) y configurar (Ansible)
+    needs: validar
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.aplicar))
+    runs-on: ubuntu-24.04
+    environment:
+      name: produccion
+      url: ${{ steps.salidas.outputs.frontend }}
+    env:
+      PG_CONN_STR: ${{ secrets.PG_CONN_STR }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GRAFANA_AUTH: ${{ secrets.GRAFANA_AUTH }}
+      TF_VAR_render_owner_id: ${{ secrets.RENDER_OWNER_ID }}
+      TF_VAR_grafana_url: ${{ secrets.GRAFANA_URL }}
+      TF_VAR_grafana_stack_slug: ${{ secrets.GRAFANA_STACK_SLUG }}
+      TF_VAR_otlp_instance_id: ${{ secrets.OTLP_INSTANCE_ID }}
+      TF_VAR_otlp_token: ${{ secrets.OTLP_TOKEN }}
+      TF_VAR_correo_alertas: ${{ secrets.CORREO_ALERTAS }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Plan
+        working-directory: terraform
+        run: |
+          mkdir -p ../reportes
+          terraform init -input=false -no-color
+          terraform plan -input=false -no-color -out=plan.tfplan | tee ../reportes/terraform-plan.txt
+
+      - name: Aplicar (Render + Grafana Cloud)
+        id: salidas
+        working-directory: terraform
+        run: |
+          terraform apply -input=false -no-color plan.tfplan | tee ../reportes/terraform-apply.txt
+          # Las salidas (con secretos) se pasan a Ansible en un archivo que se borra al terminar
+          terraform output -json > ../ansible/salidas_terraform.json
+          terraform output -no-color | tee ../reportes/terraform-salidas.txt
+          echo "frontend=$(terraform output -raw url_frontend)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Infraestructura aplicada"
+            echo "- Frontend: $(terraform output -raw url_frontend)"
+            echo "- API: $(terraform output -raw url_api)"
+            echo "- Tablero de Grafana Cloud: $(terraform output -raw url_tablero)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Configurar la base de datos (Ansible)
+        working-directory: ansible
+        run: |
+          pip install --quiet --only-binary :all: "ansible-core==${ANSIBLE_CORE_VERSION}"
+          ansible-playbook basedatos.yml
+
+      - name: Verificar los servicios integrados (Ansible)
+        working-directory: ansible
+        run: ansible-playbook verificacion.yml
+
+      - name: Borrar las salidas con secretos
+        if: always()
+        run: rm -f ansible/salidas_terraform.json terraform/plan.tfplan
+
+      - name: Guardar reportes
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reportes-infraestructura
+          path: reportes/

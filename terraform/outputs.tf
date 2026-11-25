@@ -17,6 +17,11 @@ output "servicios" {
   }
 }
 
+output "url_tablero" {
+  description = "Tablero de Grafana Cloud"
+  value       = "${var.grafana_url}/d/${grafana_dashboard.gestor.uid}"
+}
+
 output "render_owner_id" {
   description = "Workspace de Render (lo usa el recolector de logs)"
   value       = var.render_owner_id
