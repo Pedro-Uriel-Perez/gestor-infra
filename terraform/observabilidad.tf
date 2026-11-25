@@ -83,12 +83,12 @@ locals {
   prod = "deployment_environment_name=\"produccion\""
   reglas = {
     ServicioNoDisponible = {
-      expr        = "min by (instance, label_servicio) (probe_success{job=\"disponibilidad\"})"
+      expr        = "min by (instance, servicio) (probe_success{job=\"disponibilidad\"})"
       operador    = "lt"
       umbral      = 1
       para        = "3m"
       severidad   = "critica"
-      resumen     = "{{ $labels.label_servicio }} no responde desde fuera"
+      resumen     = "{{ $labels.servicio }} no responde desde fuera"
       descripcion = "Las sondas de Grafana Synthetic Monitoring no reciben 200 de {{ $labels.instance }} desde hace 3 minutos."
     }
     TasaDeErrores5xxAlta = {

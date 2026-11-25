@@ -50,8 +50,8 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "min by (label_servicio) (probe_success{job=\"disponibilidad\"})",
-          "legendFormat": "{{label_servicio}}",
+          "expr": "min by (servicio) (probe_success{job=\"disponibilidad\"})",
+          "legendFormat": "{{servicio}}",
           "refId": "A",
           "instant": true
         }
@@ -121,8 +121,8 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "100 * avg by (label_servicio) (avg_over_time(probe_success{job=\"disponibilidad\"}[24h]))",
-          "legendFormat": "{{label_servicio}}",
+          "expr": "100 * avg by (servicio) (avg_over_time(probe_success{job=\"disponibilidad\"}[24h]))",
+          "legendFormat": "{{servicio}}",
           "refId": "A",
           "instant": true
         }
@@ -183,8 +183,8 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "avg by (label_servicio) (probe_duration_seconds{job=\"disponibilidad\"})",
-          "legendFormat": "{{label_servicio}}",
+          "expr": "avg by (servicio) (probe_duration_seconds{job=\"disponibilidad\"})",
+          "legendFormat": "{{servicio}}",
           "refId": "A",
           "instant": true
         }
